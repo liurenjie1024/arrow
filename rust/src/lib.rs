@@ -22,6 +22,7 @@ extern crate libc;
 extern crate serde_json;
 
 extern crate rand;
+extern crate parquet;
 
 pub mod array;
 pub mod array_data;
@@ -33,3 +34,4 @@ pub mod error;
 pub mod memory;
 pub mod record_batch;
 pub mod util;
+pub mod parquet_adapter;
