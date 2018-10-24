@@ -17,6 +17,16 @@ use datatypes::DataType;
 use error::ArrowError;
 use error::Result;
 
+impl BasicTypeInfo {
+  fn is_repeated(&self) -> bool {
+    self.has_repetition() && (self.repetition()==Repetition::REPEATED)
+  }
+
+  fn is_nullable(&self) -> bool {
+    !self.has_repetition() || (self.repetition()==Repetition::OPTIONAL)
+  }
+}
+
 pub fn parquet_to_arrow_schema(parquet_schema: SchemaDescPtr) -> Result<Schema> {
   parquet_to_arrow_schema_by_columns(parquet_schema.clone(), 0..parquet_schema.columns().len())
 }
@@ -44,7 +54,7 @@ pub fn parquet_to_arrow_schema_by_columns<T>(
 fn parquet_to_arrow_field(schema: TypePtr, leaves: &HashSet<*const Type>) -> Result<Option<Field>> {
   match &*schema {
     Type::PrimitiveType {..} => parquet_to_arrow_primitive_field(&*schema, &leaves),
-    Type::GroupType {..} => parquet_to_arrow_struct_field(&*schema, &leaves)
+    Type::GroupType {..} => parquet_to_arrow_struct_type(&*schema, &leaves)
   }
 }
 
@@ -84,8 +94,68 @@ fn parquet_to_arrow_primitive_field(schema: &Type, leaves: &HashSet<*const Type>
   }
 }
 
-fn parquet_to_arrow_struct_field(schema: &Type, leaves: &HashSet<*const Type>)
+fn parquet_to_arrow_nested_field(schema: &Type, leaves: &HashSet<*const Type>)
   -> Result<Option<Field>> {
+
+  match schema {
+    Type::PrimitiveType {..} => panic!("This should not happen."),
+    Type::GroupType {
+      basic_info,
+      fields
+    } => {
+      if basic_info.is_repeated() {
+        parquet_to_arrow_struct_type(&schema, &leaves)
+          .map(|opt| opt.map(|dt| {
+            Field::new(basic_info.name(), DataType::List(Box::new(dt)), true)
+          }))
+      } else {
+        let nullable = basic_info.is_nullable();
+
+        let data_type = match basic_info.logical_type() {
+          LogicalType::LIST => parquet_to_arrow_list_type(&schema, &leaves),
+          other => parquet_to_arrow_struct_type(&schema, &leaves)
+        };
+
+        data_type.map(|opt| opt.map(|dt| {
+          Field::new(basic_info.name(), dt, nullable)
+        }))
+      }
+    }
+  }
+}
+
+fn parquet_to_arrow_list_type(schema: &Type, leaves: &HashSet<*const Type>)
+  -> Result<Option<DataType>> {
+  match schema {
+    Type::PrimitiveType {..} => panic!("This should not happen."),
+    Type::GroupType {
+      basic_info,
+      fields
+    } => {
+      if fields.len() == 1 {
+        let list_node = fields.first().unwrap();
+
+        match list_node {
+          Type::PrimitiveType {
+            info,
+            ..
+          } if info.is_repeated() => {
+          },
+          Type::GroupType {
+            info,
+            fields
+          } => {
+
+          }
+        }
+
+      }
+    }
+  }
+}
+
+fn parquet_to_arrow_struct_type(schema: &Type, leaves: &HashSet<*const Type>)
+                                -> Result<Option<DataType>> {
   match schema {
     Type::PrimitiveType {..} => panic!("This should not happen."),
     Type::GroupType {
@@ -102,21 +172,7 @@ fn parquet_to_arrow_struct_field(schema: &Type, leaves: &HashSet<*const Type>)
       if struct_fields.is_empty() {
         Ok(None)
       } else {
-        let basic_data_type = DataType::Struct(struct_fields);
-
-        let field = if basic_info.has_repetition() {
-          match basic_info.repetition() {
-            Repetition::REPEATED => Field::new(basic_info.name(),
-                                               DataType::List(Box::new(basic_data_type)),
-                                               true),
-            Repetition::REQUIRED => Field::new(basic_info.name(), basic_data_type, false),
-            Repetition::OPTIONAL => Field::new(basic_info.name(), basic_data_type, true),
-          }
-        } else {
-          Field::new(basic_info.name(), basic_data_type, true)
-        };
-
-        Ok(Some(field))
+        Ok(Some(DataType::Struct(struct_fields)))
       }
     }
   }
