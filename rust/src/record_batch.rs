@@ -64,6 +64,15 @@ impl RecordBatch {
 unsafe impl Send for RecordBatch {}
 unsafe impl Sync for RecordBatch {}
 
+/// An interface for reading stream of record batches.
+pub trait RecordBatchReader {
+    /// The schema of all record batches in this stream
+    fn schema(&self) -> &Schema;
+    
+    /// Return an iterator of record batches.
+    fn iter(&self) -> impl Iterator<Item=RecordBatch>;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
