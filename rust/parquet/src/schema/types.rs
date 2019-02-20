@@ -38,7 +38,7 @@ pub type ColumnDescPtr = Rc<ColumnDescriptor>;
 /// Used to describe primitive leaf fields and structs, including top-level schema.
 /// Note that the top-level schema type is represented using `GroupType` whose
 /// repetition is `None`.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Type {
     PrimitiveType {
         basic_info: BasicTypeInfo,
@@ -163,6 +163,11 @@ impl Type {
             Type::GroupType { ref basic_info, .. } => !basic_info.has_repetition(),
             _ => false,
         }
+    }
+
+    pub fn is_optional(&self) -> bool {
+        self.get_basic_info().has_repetition()
+            && self.get_basic_info().repetition() != Repetition::REQUIRED
     }
 }
 
@@ -458,7 +463,7 @@ impl<'a> GroupTypeBuilder<'a> {
 
 /// Basic type info. This contains information such as the name of the type,
 /// the repetition level, the logical type and the kind of the type (group, primitive).
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct BasicTypeInfo {
     name: String,
     repetition: Option<Repetition>,
@@ -526,6 +531,10 @@ impl ColumnPath {
     /// ```
     pub fn string(&self) -> String {
         self.parts.join(".")
+    }
+
+    pub fn append(&mut self, mut tail: Vec<String>) -> () {
+        self.parts.append(&mut tail);
     }
 }
 
