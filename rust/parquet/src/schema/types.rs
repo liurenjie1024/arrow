@@ -164,6 +164,11 @@ impl Type {
             _ => false,
         }
     }
+
+    pub fn is_optional(&self) -> bool {
+        self.get_basic_info().has_repetition()
+            && self.get_basic_info().repetition() != Repetition::REQUIRED
+    }
 }
 
 /// A builder for primitive types. All attributes are optional
@@ -526,6 +531,10 @@ impl ColumnPath {
     /// ```
     pub fn string(&self) -> String {
         self.parts.join(".")
+    }
+
+    pub fn append(&mut self, mut tail: Vec<String>) -> () {
+        self.parts.append(&mut tail);
     }
 }
 

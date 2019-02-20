@@ -16,6 +16,8 @@
 // under the License.
 
 #![allow(bare_trait_objects)]
+#[macro_use]
+extern crate clap;
 
 use arrow::array::*;
 use arrow::datatypes::{DataType, TimeUnit};
