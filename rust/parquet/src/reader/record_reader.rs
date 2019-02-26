@@ -9,6 +9,7 @@ use crate::errors::Result;
 use crate::errors::ParquetError;
 use crate::column::reader::ColumnReaderImpl;
 use crate::schema::types::ColumnDescPtr;
+use crate::column::page::PageReader;
 
 const MIN_BATCH_SIZE: usize = 1024;
 
@@ -28,7 +29,7 @@ pub(super) struct RecordReader<T: DataType> {
 }
 
 impl<T: DataType> RecordReader<T> {
-  pub fn new(column_schema: ColumnDescPtr, column_reader: ColumnReaderImpl<T>) -> Self {
+  pub fn new(column_schema: ColumnDescPtr, page_reader: Box<PageReader>) -> Self {
     let def_levels = if column_schema.max_rep_level()>0 {
       Some(MutableBuffer::new(MIN_BATCH_SIZE))
     } else {
@@ -45,7 +46,7 @@ impl<T: DataType> RecordReader<T> {
       records: MutableBuffer::new(MIN_BATCH_SIZE),
       def_levels,
       rep_levels,
-      column_reader,
+      column_reader: ColumnReaderImpl::new(column_schema.clone(), page_reader),
       column_schema,
       records_num: 0usize,
       values_pos: 0usize,
@@ -104,6 +105,11 @@ impl<T: DataType> RecordReader<T> {
     self.records_num = 0;
     self.values_pos = 0;
     self.set_values_written(0)
+  }
+
+  pub fn set_page_reader(&mut self, page_reader: Box<PageReader>) -> Result<()> {
+    self.column_reader = ColumnReaderImpl::new(self.column_schema.clone(), page_reader);
+    Ok(())
   }
 
   fn read_one_batch(&mut self, batch_size: usize) -> Result<usize> {
