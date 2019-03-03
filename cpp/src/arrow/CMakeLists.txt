@@ -104,6 +104,10 @@ set(ARROW_SRCS
     csv/options.cc
     csv/parser.cc
     csv/reader.cc
+    json/options.cc
+    json/chunker.cc
+    json/parser.cc
+    json/reader.cc
     io/buffered.cc
     io/compressed.cc
     io/file.cc
@@ -205,7 +209,7 @@ if(ARROW_IPC)
   set(ARROW_IPC_SRCS
       ipc/dictionary.cc
       ipc/feather.cc
-      ipc/json.cc
+      ipc/json-integration.cc
       ipc/json-internal.cc
       ipc/json-simple.cc
       ipc/message.cc
@@ -262,7 +266,7 @@ if(ARROW_BUILD_TESTS OR ARROW_BUILD_BENCHMARKS)
                 OUTPUTS
                 ARROW_TESTING_LIBRARIES
                 DEPENDENCIES
-                ${GTEST_LIBRARY}
+                arrow_test_dependencies
                 SHARED_LINK_LIBS
                 arrow_shared
                 ${GTEST_LIBRARY}
@@ -321,6 +325,7 @@ add_arrow_benchmark(column-benchmark)
 
 add_subdirectory(array)
 add_subdirectory(csv)
+add_subdirectory(json)
 add_subdirectory(io)
 add_subdirectory(util)
 add_subdirectory(vendored)

@@ -17,119 +17,17 @@
 
 //! Defines primitive computations on arrays, e.g. addition, equality, boolean logic.
 
-use std::ops::{Add, Div, Mul, Sub};
+use std::cmp;
+use std::ops::Add;
+use std::sync::Arc;
 
-use num::Zero;
-
-use crate::array::{Array, BooleanArray, PrimitiveArray};
-use crate::builder::PrimitiveBuilder;
-use crate::datatypes;
-use crate::datatypes::ArrowNumericType;
+use crate::array::{
+    Array, ArrayRef, BinaryArray, BooleanArray, Float32Array, Float64Array, Int16Array,
+    Int32Array, Int64Array, Int8Array, PrimitiveArray, UInt16Array, UInt32Array,
+    UInt64Array, UInt8Array,
+};
+use crate::datatypes::{ArrowNumericType, DataType};
 use crate::error::{ArrowError, Result};
-
-/// Perform `left + right` operation on two arrays. If either left or right value is null
-/// then the result is also null.
-pub fn add<T>(
-    left: &PrimitiveArray<T>,
-    right: &PrimitiveArray<T>,
-) -> Result<PrimitiveArray<T>>
-where
-    T: datatypes::ArrowNumericType,
-    T::Native: Add<Output = T::Native>
-        + Sub<Output = T::Native>
-        + Mul<Output = T::Native>
-        + Div<Output = T::Native>
-        + Zero,
-{
-    math_op(left, right, |a, b| Ok(a + b))
-}
-
-/// Perform `left - right` operation on two arrays. If either left or right value is null
-/// then the result is also null.
-pub fn subtract<T>(
-    left: &PrimitiveArray<T>,
-    right: &PrimitiveArray<T>,
-) -> Result<PrimitiveArray<T>>
-where
-    T: datatypes::ArrowNumericType,
-    T::Native: Add<Output = T::Native>
-        + Sub<Output = T::Native>
-        + Mul<Output = T::Native>
-        + Div<Output = T::Native>
-        + Zero,
-{
-    math_op(left, right, |a, b| Ok(a - b))
-}
-
-/// Perform `left * right` operation on two arrays. If either left or right value is null
-/// then the result is also null.
-pub fn multiply<T>(
-    left: &PrimitiveArray<T>,
-    right: &PrimitiveArray<T>,
-) -> Result<PrimitiveArray<T>>
-where
-    T: datatypes::ArrowNumericType,
-    T::Native: Add<Output = T::Native>
-        + Sub<Output = T::Native>
-        + Mul<Output = T::Native>
-        + Div<Output = T::Native>
-        + Zero,
-{
-    math_op(left, right, |a, b| Ok(a * b))
-}
-
-/// Perform `left / right` operation on two arrays. If either left or right value is null
-/// then the result is also null. If any right hand value is zero then the result of this
-/// operation will be `Err(ArrowError::DivideByZero)`.
-pub fn divide<T>(
-    left: &PrimitiveArray<T>,
-    right: &PrimitiveArray<T>,
-) -> Result<PrimitiveArray<T>>
-where
-    T: datatypes::ArrowNumericType,
-    T::Native: Add<Output = T::Native>
-        + Sub<Output = T::Native>
-        + Mul<Output = T::Native>
-        + Div<Output = T::Native>
-        + Zero,
-{
-    math_op(left, right, |a, b| {
-        if b.is_zero() {
-            Err(ArrowError::DivideByZero)
-        } else {
-            Ok(a / b)
-        }
-    })
-}
-
-/// Helper function to perform math lambda function on values from two arrays. If either
-/// left or right value is null then the output value is also null, so `1 + null` is
-/// `null`.
-fn math_op<T, F>(
-    left: &PrimitiveArray<T>,
-    right: &PrimitiveArray<T>,
-    op: F,
-) -> Result<PrimitiveArray<T>>
-where
-    T: datatypes::ArrowNumericType,
-    F: Fn(T::Native, T::Native) -> Result<T::Native>,
-{
-    if left.len() != right.len() {
-        return Err(ArrowError::ComputeError(
-            "Cannot perform math operation on arrays of different length".to_string(),
-        ));
-    }
-    let mut b = PrimitiveBuilder::<T>::new(left.len());
-    for i in 0..left.len() {
-        let index = i;
-        if left.is_null(i) || right.is_null(i) {
-            b.append_null()?;
-        } else {
-            b.append_value(op(left.value(index), right.value(index))?)?;
-        }
-    }
-    Ok(b.finish())
-}
 
 /// Returns the minimum value in the array, according to the natural order.
 pub fn min<T>(array: &PrimitiveArray<T>) -> Option<T::Native>
@@ -312,103 +210,105 @@ where
     Ok(b.finish())
 }
 
+macro_rules! filter_array {
+    ($array:expr, $filter:expr, $array_type:ident) => {{
+        let b = $array.as_any().downcast_ref::<$array_type>().unwrap();
+        let mut builder = $array_type::builder(b.len());
+        for i in 0..b.len() {
+            if $filter.value(i) {
+                if b.is_null(i) {
+                    builder.append_null()?;
+                } else {
+                    builder.append_value(b.value(i))?;
+                }
+            }
+        }
+        Ok(Arc::new(builder.finish()))
+    }};
+}
+
+pub fn filter(array: &Array, filter: &BooleanArray) -> Result<ArrayRef> {
+    match array.data_type() {
+        DataType::UInt8 => filter_array!(array, filter, UInt8Array),
+        DataType::UInt16 => filter_array!(array, filter, UInt16Array),
+        DataType::UInt32 => filter_array!(array, filter, UInt32Array),
+        DataType::UInt64 => filter_array!(array, filter, UInt64Array),
+        DataType::Int8 => filter_array!(array, filter, Int8Array),
+        DataType::Int16 => filter_array!(array, filter, Int16Array),
+        DataType::Int32 => filter_array!(array, filter, Int32Array),
+        DataType::Int64 => filter_array!(array, filter, Int64Array),
+        DataType::Float32 => filter_array!(array, filter, Float32Array),
+        DataType::Float64 => filter_array!(array, filter, Float64Array),
+        DataType::Boolean => filter_array!(array, filter, BooleanArray),
+        DataType::Utf8 => {
+            let b = array.as_any().downcast_ref::<BinaryArray>().unwrap();
+            let mut values: Vec<&[u8]> = Vec::with_capacity(b.len());
+            for i in 0..b.len() {
+                if filter.value(i) {
+                    values.push(b.value(i));
+                }
+            }
+            Ok(Arc::new(BinaryArray::from(values)))
+        }
+        other => Err(ArrowError::ComputeError(format!(
+            "filter not supported for {:?}",
+            other
+        ))),
+    }
+}
+
+macro_rules! limit_array {
+    ($array:expr, $num_elements:expr, $array_type:ident) => {{
+        let b = $array.as_any().downcast_ref::<$array_type>().unwrap();
+        let mut builder = $array_type::builder($num_elements);
+        for i in 0..$num_elements {
+            if b.is_null(i) {
+                builder.append_null()?;
+            } else {
+                builder.append_value(b.value(i))?;
+            }
+        }
+        Ok(Arc::new(builder.finish()))
+    }};
+}
+
+/// Returns the array, taking only the number of elements specified
+///
+/// Returns the whole array if the number of elements specified is larger than the length of the array
+pub fn limit(array: &Array, num_elements: usize) -> Result<ArrayRef> {
+    let num_elements_safe: usize = cmp::min(array.len(), num_elements);
+
+    match array.data_type() {
+        DataType::UInt8 => limit_array!(array, num_elements_safe, UInt8Array),
+        DataType::UInt16 => limit_array!(array, num_elements_safe, UInt16Array),
+        DataType::UInt32 => limit_array!(array, num_elements_safe, UInt32Array),
+        DataType::UInt64 => limit_array!(array, num_elements_safe, UInt64Array),
+        DataType::Int8 => limit_array!(array, num_elements_safe, Int8Array),
+        DataType::Int16 => limit_array!(array, num_elements_safe, Int16Array),
+        DataType::Int32 => limit_array!(array, num_elements_safe, Int32Array),
+        DataType::Int64 => limit_array!(array, num_elements_safe, Int64Array),
+        DataType::Float32 => limit_array!(array, num_elements_safe, Float32Array),
+        DataType::Float64 => limit_array!(array, num_elements_safe, Float64Array),
+        DataType::Boolean => limit_array!(array, num_elements_safe, BooleanArray),
+        DataType::Utf8 => {
+            let b = array.as_any().downcast_ref::<BinaryArray>().unwrap();
+            let mut values: Vec<&[u8]> = Vec::with_capacity(num_elements_safe);
+            for i in 0..num_elements_safe {
+                values.push(b.value(i));
+            }
+            Ok(Arc::new(BinaryArray::from(values)))
+        }
+        other => Err(ArrowError::ComputeError(format!(
+            "limit not supported for {:?}",
+            other
+        ))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::array::{Float64Array, Int32Array};
-
-    #[test]
-    fn test_primitive_array_add() {
-        let a = Int32Array::from(vec![5, 6, 7, 8, 9]);
-        let b = Int32Array::from(vec![6, 7, 8, 9, 8]);
-        let c = add(&a, &b).unwrap();
-        assert_eq!(11, c.value(0));
-        assert_eq!(13, c.value(1));
-        assert_eq!(15, c.value(2));
-        assert_eq!(17, c.value(3));
-        assert_eq!(17, c.value(4));
-    }
-
-    #[test]
-    fn test_primitive_array_add_mismatched_length() {
-        let a = Int32Array::from(vec![5, 6, 7, 8, 9]);
-        let b = Int32Array::from(vec![6, 7, 8]);
-        let e = add(&a, &b)
-            .err()
-            .expect("should have failed due to different lengths");
-        assert_eq!(
-            "ComputeError(\"Cannot perform math operation on arrays of different length\")",
-            format!("{:?}", e)
-        );
-    }
-
-    #[test]
-    fn test_primitive_array_subtract() {
-        let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
-        let b = Int32Array::from(vec![5, 4, 3, 2, 1]);
-        let c = subtract(&a, &b).unwrap();
-        assert_eq!(-4, c.value(0));
-        assert_eq!(-2, c.value(1));
-        assert_eq!(0, c.value(2));
-        assert_eq!(2, c.value(3));
-        assert_eq!(4, c.value(4));
-    }
-
-    #[test]
-    fn test_primitive_array_multiply() {
-        let a = Int32Array::from(vec![5, 6, 7, 8, 9]);
-        let b = Int32Array::from(vec![6, 7, 8, 9, 8]);
-        let c = multiply(&a, &b).unwrap();
-        assert_eq!(30, c.value(0));
-        assert_eq!(42, c.value(1));
-        assert_eq!(56, c.value(2));
-        assert_eq!(72, c.value(3));
-        assert_eq!(72, c.value(4));
-    }
-
-    #[test]
-    fn test_primitive_array_divide() {
-        let a = Int32Array::from(vec![15, 15, 8, 1, 9]);
-        let b = Int32Array::from(vec![5, 6, 8, 9, 1]);
-        let c = divide(&a, &b).unwrap();
-        assert_eq!(3, c.value(0));
-        assert_eq!(2, c.value(1));
-        assert_eq!(1, c.value(2));
-        assert_eq!(0, c.value(3));
-        assert_eq!(9, c.value(4));
-    }
-
-    #[test]
-    fn test_primitive_array_divide_by_zero() {
-        let a = Int32Array::from(vec![15]);
-        let b = Int32Array::from(vec![0]);
-        assert_eq!(
-            ArrowError::DivideByZero,
-            divide(&a, &b).err().expect("divide by zero should fail")
-        );
-    }
-
-    #[test]
-    fn test_primitive_array_divide_f64() {
-        let a = Float64Array::from(vec![15.0, 15.0, 8.0]);
-        let b = Float64Array::from(vec![5.0, 6.0, 8.0]);
-        let c = divide(&a, &b).unwrap();
-        assert_eq!(3.0, c.value(0));
-        assert_eq!(2.5, c.value(1));
-        assert_eq!(1.0, c.value(2));
-    }
-
-    #[test]
-    fn test_primitive_array_add_with_nulls() {
-        let a = Int32Array::from(vec![Some(5), None, Some(7), None]);
-        let b = Int32Array::from(vec![None, None, Some(6), Some(7)]);
-        let c = add(&a, &b).unwrap();
-        assert_eq!(true, c.is_null(0));
-        assert_eq!(true, c.is_null(1));
-        assert_eq!(false, c.is_null(2));
-        assert_eq!(true, c.is_null(3));
-        assert_eq!(13, c.value(2));
-    }
 
     #[test]
     fn test_primitive_array_sum() {
@@ -558,5 +458,81 @@ mod tests {
         let a = Int32Array::from(vec![Some(5), None, None, Some(8), Some(9)]);
         assert_eq!(5, min(&a).unwrap());
         assert_eq!(9, max(&a).unwrap());
+    }
+
+    #[test]
+    fn test_filter_array() {
+        let a = Int32Array::from(vec![5, 6, 7, 8, 9]);
+        let b = BooleanArray::from(vec![true, false, false, true, false]);
+        let c = filter(&a, &b).unwrap();
+        let d = c.as_ref().as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(2, d.len());
+        assert_eq!(5, d.value(0));
+        assert_eq!(8, d.value(1));
+    }
+
+    #[test]
+    fn test_filter_binary_array() {
+        let a = BinaryArray::from(vec!["hello", " ", "world", "!"]);
+        let b = BooleanArray::from(vec![true, false, true, false]);
+        let c = filter(&a, &b).unwrap();
+        let d = c.as_ref().as_any().downcast_ref::<BinaryArray>().unwrap();
+        assert_eq!(2, d.len());
+        assert_eq!("hello", d.get_string(0));
+        assert_eq!("world", d.get_string(1));
+    }
+
+    #[test]
+    fn test_filter_array_with_null() {
+        let a = Int32Array::from(vec![Some(5), None]);
+        let b = BooleanArray::from(vec![false, true]);
+        let c = filter(&a, &b).unwrap();
+        let d = c.as_ref().as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(1, d.len());
+        assert_eq!(true, d.is_null(0));
+    }
+
+    #[test]
+    fn test_limit_array() {
+        let a = Int32Array::from(vec![5, 6, 7, 8, 9]);
+        let b = limit(&a, 3).unwrap();
+        let c = b.as_ref().as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(3, c.len());
+        assert_eq!(5, c.value(0));
+        assert_eq!(6, c.value(1));
+        assert_eq!(7, c.value(2));
+    }
+
+    #[test]
+    fn test_limit_binary_array() {
+        let a = BinaryArray::from(vec!["hello", " ", "world", "!"]);
+        let b = limit(&a, 2).unwrap();
+        let c = b.as_ref().as_any().downcast_ref::<BinaryArray>().unwrap();
+        assert_eq!(2, c.len());
+        assert_eq!("hello", c.get_string(0));
+        assert_eq!(" ", c.get_string(1));
+    }
+
+    #[test]
+    fn test_limit_array_with_null() {
+        let a = Int32Array::from(vec![None, Some(5)]);
+        let b = limit(&a, 1).unwrap();
+        let c = b.as_ref().as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(1, c.len());
+        assert_eq!(true, c.is_null(0));
+    }
+
+    #[test]
+    fn test_limit_array_with_limit_too_large() {
+        let a = Int32Array::from(vec![5, 6, 7, 8, 9]);
+        let b = limit(&a, 6).unwrap();
+        let c = b.as_ref().as_any().downcast_ref::<Int32Array>().unwrap();
+
+        assert_eq!(5, c.len());
+        assert_eq!(a.value(0), c.value(0));
+        assert_eq!(a.value(1), c.value(1));
+        assert_eq!(a.value(2), c.value(2));
+        assert_eq!(a.value(3), c.value(3));
+        assert_eq!(a.value(4), c.value(4));
     }
 }

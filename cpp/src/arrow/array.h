@@ -32,7 +32,7 @@
 #include "arrow/util/bit-util.h"
 #include "arrow/util/checked_cast.h"
 #include "arrow/util/macros.h"
-#include "arrow/util/string_view.h"
+#include "arrow/util/string_view.h"  // IWYU pragma: export
 #include "arrow/util/visibility.h"
 
 namespace arrow {
@@ -485,6 +485,8 @@ class ARROW_EXPORT ListArray : public Array {
   /// \param[out] out Will have length equal to offsets.length() - 1
   static Status FromArrays(const Array& offsets, const Array& values, MemoryPool* pool,
                            std::shared_ptr<Array>* out);
+
+  const ListType* list_type() const;
 
   /// \brief Return array object containing the list's values
   std::shared_ptr<Array> values() const;

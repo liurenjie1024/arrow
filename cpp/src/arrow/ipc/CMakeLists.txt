@@ -28,7 +28,7 @@ add_arrow_test(json-simple-test PREFIX "arrow-ipc")
 add_arrow_test(json-test PREFIX "arrow-ipc")
 
 if(NOT ARROW_BOOST_HEADER_ONLY)
-  add_arrow_test(json-integration-test EXTRA_LINK_LIBS gflags_static)
+  add_arrow_test(json-integration-test EXTRA_LINK_LIBS ${GFLAGS_LIBRARY})
 
   # Test is being built
   if(TARGET arrow-json-integration-test)
@@ -58,6 +58,7 @@ set(FBS_SRC
     ${ARROW_SOURCE_DIR}/../format/File.fbs
     ${ARROW_SOURCE_DIR}/../format/Schema.fbs
     ${ARROW_SOURCE_DIR}/../format/Tensor.fbs
+    ${ARROW_SOURCE_DIR}/../format/SparseTensor.fbs
     ${CMAKE_CURRENT_SOURCE_DIR}/feather.fbs)
 
 foreach(FIL ${FBS_SRC})

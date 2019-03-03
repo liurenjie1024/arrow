@@ -22,7 +22,6 @@ import pytest
 import hypothesis as h
 import hypothesis.strategies as st
 
-import pandas as pd
 import numpy as np
 import pyarrow as pa
 import pyarrow.types as types
@@ -249,8 +248,9 @@ def test_struct_type():
     assert ty['b'] == ty[2]
 
     # Duplicate
-    with pytest.raises(KeyError):
-        ty['a']
+    with pytest.warns(UserWarning):
+        with pytest.raises(KeyError):
+            ty['a']
 
     # Not found
     with pytest.raises(KeyError):
@@ -296,10 +296,12 @@ def test_union_type():
         ty = pa.union(fields, mode=mode)
         assert ty.mode == 'sparse'
         check_fields(ty, fields)
+        assert ty.type_codes == [0, 1]
     for mode in ('dense', pa.lib.UnionMode_DENSE):
         ty = pa.union(fields, mode=mode)
         assert ty.mode == 'dense'
         check_fields(ty, fields)
+        assert ty.type_codes == [0, 1]
     for mode in ('unknown', 2):
         with pytest.raises(ValueError, match='Invalid union mode'):
             pa.union(fields, mode=mode)
@@ -519,16 +521,6 @@ def test_field_add_remove_metadata():
     assert f5.equals(f6)
 
 
-def test_empty_table():
-    schema = pa.schema([
-        pa.field('oneField', pa.int64())
-    ])
-    table = schema.empty_table()
-    assert isinstance(table, pa.Table)
-    assert table.num_rows == 0
-    assert table.schema == schema
-
-
 def test_is_integer_value():
     assert pa.types.is_integer_value(1)
     assert pa.types.is_integer_value(np.int64(1))
@@ -548,23 +540,6 @@ def test_is_boolean_value():
     assert pa.types.is_boolean_value(False)
     assert pa.types.is_boolean_value(np.bool_(True))
     assert pa.types.is_boolean_value(np.bool_(False))
-
-
-@pytest.mark.parametrize('data', [
-    list(range(10)),
-    pd.Categorical(list(range(10))),
-    ['foo', 'bar', None, 'baz', 'qux'],
-    np.array([
-        '2007-07-13T01:23:34.123456789',
-        '2006-01-13T12:34:56.432539784',
-        '2010-08-13T05:46:57.437699912'
-    ], dtype='datetime64[ns]')
-])
-def test_schema_from_pandas(data):
-    df = pd.DataFrame({'a': data})
-    schema = pa.Schema.from_pandas(df)
-    expected = pa.Table.from_pandas(df).schema
-    assert schema == expected
 
 
 @h.given(

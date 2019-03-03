@@ -20,7 +20,7 @@
 #include <limits>
 #include <memory>
 
-#include "grpcpp/impl/codegen/config_protobuf.h"
+#include <grpcpp/impl/codegen/config_protobuf.h>
 
 // It is necessary to undefined this macro so that the protobuf
 // SerializationTraits specialization is not declared in proto_utils.h. We've
@@ -29,20 +29,34 @@
 // for our faster serialization-deserialization path
 #undef GRPC_OPEN_SOURCE_PROTO
 
-#include "grpcpp/impl/codegen/proto_utils.h"
+#include <grpcpp/impl/codegen/proto_utils.h>
+
+namespace grpc {
+
+class ByteBuffer;
+
+}  // namespace grpc
 
 namespace arrow {
-namespace ipc {
-namespace internal {
-
-struct IpcPayload;
-
-}  // namespace internal
-}  // namespace ipc
-
 namespace flight {
 
+struct FlightPayload;
+
+namespace internal {
+
 struct FlightData;
+
+// Those two functions are defined in serialization-internal.cc
+
+// Write FlightData to a grpc::ByteBuffer without extra copying
+grpc::Status FlightDataSerialize(const FlightPayload& msg, grpc::ByteBuffer* out,
+                                 bool* own_buffer);
+
+// Read internal::FlightData from grpc::ByteBuffer containing FlightData
+// protobuf without copying
+grpc::Status FlightDataDeserialize(grpc::ByteBuffer* buffer, FlightData* out);
+
+}  // namespace internal
 
 namespace protocol {
 
@@ -53,15 +67,6 @@ class FlightData;
 }  // namespace arrow
 
 namespace grpc {
-
-using arrow::flight::FlightData;
-using arrow::ipc::internal::IpcPayload;
-
-class ByteBuffer;
-class Status;
-
-Status FlightDataSerialize(const IpcPayload& msg, ByteBuffer* out, bool* own_buffer);
-Status FlightDataDeserialize(ByteBuffer* buffer, FlightData* out);
 
 // This class provides a protobuf serializer. It translates between protobuf
 // objects and grpc_byte_buffers. More information about SerializationTraits can
@@ -88,12 +93,13 @@ class SerializationTraits<T, typename std::enable_if<std::is_same<
  public:
   static Status Serialize(const grpc::protobuf::Message& msg, ByteBuffer* bb,
                           bool* own_buffer) {
-    return FlightDataSerialize(*reinterpret_cast<const IpcPayload*>(&msg), bb,
-                               own_buffer);
+    return arrow::flight::internal::FlightDataSerialize(
+        *reinterpret_cast<const arrow::flight::FlightPayload*>(&msg), bb, own_buffer);
   }
 
   static Status Deserialize(ByteBuffer* buffer, grpc::protobuf::Message* msg) {
-    return FlightDataDeserialize(buffer, reinterpret_cast<FlightData*>(msg));
+    return arrow::flight::internal::FlightDataDeserialize(
+        buffer, reinterpret_cast<arrow::flight::internal::FlightData*>(msg));
   }
 };
 

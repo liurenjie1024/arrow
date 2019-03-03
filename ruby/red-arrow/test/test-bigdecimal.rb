@@ -15,10 +15,10 @@
 # specific language governing permissions and limitations
 # under the License.
 
-diff --git a/pom.xml b/pom.xml
-index f0e5ed9c56..b30d4d61d6 100644
---- a/pom.xml
-+++ b/pom.xml
-@@ -2092,0 +2093,2 @@
-+              <arg>-Xmax-classfile-name</arg>
-+              <arg>128</arg>
+class BigDecimalTest < Test::Unit::TestCase
+  test("#to_arrow") do
+    arrow_decimal = BigDecimal("3.14").to_arrow
+    assert_equal(Arrow::Decimal128.new("3.14"),
+                 BigDecimal("3.14").to_arrow)
+  end
+end

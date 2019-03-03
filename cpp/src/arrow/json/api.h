@@ -15,9 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-namespace gandiva {
+#ifndef ARROW_JSON_API_H
+#define ARROW_JSON_API_H
 
-// Path to the byte-code file.
-extern const char kByteCodeFilePath[] = "${GANDIVA_BC_INSTALL_PATH}";
+#include "arrow/json/options.h"
+#include "arrow/json/reader.h"
 
-} // namespace gandiva
+#endif  // ARROW_JSON_API_H
