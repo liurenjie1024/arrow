@@ -21,5 +21,6 @@
 //! This mod provides API for converting between arrow and parquet.
 
 pub mod schema;
+mod page_iterator;
 
 pub use self::schema::{parquet_to_arrow_schema, parquet_to_arrow_schema_by_columns};
