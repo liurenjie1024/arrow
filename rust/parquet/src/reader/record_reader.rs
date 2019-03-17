@@ -7,17 +7,18 @@ use arrow::buffer::MutableBuffer;
 use crate::data_type::DataType;
 use crate::errors::Result;
 use crate::errors::ParquetError;
-use crate::column::reader::ColumnReaderImpl;
+use crate::column::reader::ColumnReader;
 use crate::schema::types::ColumnDescPtr;
 use crate::column::page::PageReader;
+use crate::column::reader::get_column_reader;
 
 const MIN_BATCH_SIZE: usize = 1024;
 
-pub(super) struct RecordReader<T: DataType> {
+pub struct RecordReader {
   records: MutableBuffer,
   def_levels: Option<MutableBuffer>,
   rep_levels: Option<MutableBuffer>,
-  column_reader: ColumnReaderImpl<T>,
+  column_reader: ColumnReader,
   column_schema: ColumnDescPtr,
 
   /// Number of records seen
@@ -28,7 +29,7 @@ pub(super) struct RecordReader<T: DataType> {
   values_written: usize,
 }
 
-impl<T: DataType> RecordReader<T> {
+impl RecordReader {
   pub fn new(column_schema: ColumnDescPtr, page_reader: Box<PageReader>) -> Self {
     let def_levels = if column_schema.max_rep_level()>0 {
       Some(MutableBuffer::new(MIN_BATCH_SIZE))
@@ -46,7 +47,7 @@ impl<T: DataType> RecordReader<T> {
       records: MutableBuffer::new(MIN_BATCH_SIZE),
       def_levels,
       rep_levels,
-      column_reader: ColumnReaderImpl::new(column_schema.clone(), page_reader),
+      column_reader: get_column_reader(column_schema.clone(), page_reader),
       column_schema,
       records_num: 0usize,
       values_pos: 0usize,
@@ -108,11 +109,11 @@ impl<T: DataType> RecordReader<T> {
   }
 
   pub fn set_page_reader(&mut self, page_reader: Box<PageReader>) -> Result<()> {
-    self.column_reader = ColumnReaderImpl::new(self.column_schema.clone(), page_reader);
+    self.column_reader = get_column_reader(self.column_schema.clone(), page_reader);
     Ok(())
   }
 
-  fn read_one_batch(&mut self, batch_size: usize) -> Result<usize> {
+  fn read_one_batch<T: DataType>(&mut self, batch_size: usize) -> Result<usize> {
     // Reserve spaces
     self.records.reserve(self.records.len()+batch_size*T::get_type_size())?;
     self.rep_levels.iter_mut().try_for_each(|buf| {
@@ -235,15 +236,15 @@ impl<T: DataType> RecordReader<T> {
     }
   }
 
-  #[inline]
-  fn record_data_buf(&self, start: usize) -> &mut [T::T] {
-    unsafe {
-      slice::from_raw_parts_mut(
-        transmute::<*const u8, *mut T::T>(self.records.raw_data()).add(start),
-        self.records.capacity() / T::get_type_size()-start
-      )
-    }
-  }
+//  #[inline]
+//  fn record_data_buf(&self, start: usize) -> &mut [T::T] {
+//    unsafe {
+//      slice::from_raw_parts_mut(
+//        transmute::<*const u8, *mut T::T>(self.records.raw_data()).add(start),
+//        self.records.capacity() / T::get_type_size()-start
+//      )
+//    }
+//  }
 
   fn set_values_written(&mut self, new_values_written: usize) -> Result<()> {
     self.values_written = new_values_written;
