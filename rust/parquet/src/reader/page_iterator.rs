@@ -46,14 +46,18 @@ impl<T> Iterator for FilePageIterator<T>
     type Item = Result<Box<PageReader>>;
 
     fn next(&mut self) -> Option<Result<Box<PageReader>>> {
-        self.row_group_indices.map(|row_group_index| {
-            self.file_reader.get_row_group(row_group_index)
+        self.row_group_indices
+            .next()
+            .map(|row_group_index| { self.file_reader
+                .get_row_group(row_group_index)
                 .and_then(|r| r.get_column_page_reader(self.column_index))
         })
     }
 }
 
-impl<T> PageIterator for FilePageIterator<T> {
+impl<T> PageIterator for FilePageIterator<T>
+    where T: Iterator<Item=usize>
+{
     fn schema(&mut self) -> Result<SchemaDescPtr>  {
         Ok(self.file_reader.metadata()
             .file_metadata()
@@ -61,7 +65,7 @@ impl<T> PageIterator for FilePageIterator<T> {
     }
 
     fn column_schema(&mut self) -> Result<ColumnDescPtr> {
-        Ok(self.schema()
-            .column(self.column_index))
+        self.schema()
+            .map(|s| s.column(self.column_index))
     }
 }

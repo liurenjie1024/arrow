@@ -99,7 +99,7 @@ macro_rules! eof_err {
 #[inline]
 pub fn check_in_range(index: usize, max_size: usize) -> Result<()> {
     if index >= max_size {
-        general_err!("Index {} out of bound {}", index, max_size)
+        Err(general_err!("Index {} out of bound {}", index, max_size))
     } else {
         Ok(())
     }

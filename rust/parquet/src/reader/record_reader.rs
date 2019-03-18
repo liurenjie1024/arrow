@@ -4,21 +4,22 @@ use std::mem::size_of;
 use std::slice;
 
 use arrow::buffer::MutableBuffer;
+use arrow::builder::BooleanBufferBuilder;
 use crate::data_type::DataType;
 use crate::errors::Result;
 use crate::errors::ParquetError;
-use crate::column::reader::ColumnReader;
 use crate::schema::types::ColumnDescPtr;
 use crate::column::page::PageReader;
-use crate::column::reader::get_column_reader;
+use crate::column::reader::ColumnReaderImpl;
 
 const MIN_BATCH_SIZE: usize = 1024;
 
-pub struct RecordReader {
+pub struct RecordReader<T: DataType> {
   records: MutableBuffer,
   def_levels: Option<MutableBuffer>,
   rep_levels: Option<MutableBuffer>,
-  column_reader: ColumnReader,
+  bitmaps: Option<BooleanBufferBuilder>,
+  column_reader: ColumnReaderImpl<T>,
   column_schema: ColumnDescPtr,
 
   /// Number of records seen
@@ -29,7 +30,7 @@ pub struct RecordReader {
   values_written: usize,
 }
 
-impl RecordReader {
+impl<T: DataType> RecordReader<T> {
   pub fn new(column_schema: ColumnDescPtr, page_reader: Box<PageReader>) -> Self {
     let def_levels = if column_schema.max_rep_level()>0 {
       Some(MutableBuffer::new(MIN_BATCH_SIZE))
@@ -43,11 +44,18 @@ impl RecordReader {
       None
     };
 
+    let bitmaps = if column_schema.max_def_level()>0 {
+      Some(BooleanBufferBuilder::new(MIN_BATCH_SIZE))
+    } else {
+      None
+    };
+
     Self {
       records: MutableBuffer::new(MIN_BATCH_SIZE),
       def_levels,
       rep_levels,
-      column_reader: get_column_reader(column_schema.clone(), page_reader),
+      bitmaps,
+      column_reader: ColumnReaderImpl::new(column_schema.clone(), page_reader),
       column_schema,
       records_num: 0usize,
       values_pos: 0usize,
@@ -90,16 +98,24 @@ impl RecordReader {
     Ok(self.records.data())
   }
 
-  pub fn repetition_levels_data(&self) -> Result<&[u8]> {
-    self.rep_levels.as_ref().map(|buf| buf.data()).ok_or_else(|| {
-      general_err!("There is no repetition level data")
-    })
+  pub fn repetition_levels_data(&self) -> Option<&[i16]> {
+    unsafe {
+      self.rep_levels.as_ref().map(|buf| {
+        slice::from_raw_parts(
+          transmute::<*const u8, *const i16>(buf.raw_data()),
+          buf.capacity() / size_of::<i16>())
+      })
+    }
   }
 
-  pub fn definition_levels_data(&self) -> Result<&[u8]> {
-    self.def_levels.as_ref().map(|buf| buf.data()).ok_or_else(|| {
-      general_err!("There is no definition level data")
-    })
+  pub fn definition_levels_data(&self) -> Option<&[i16]> {
+    unsafe {
+      self.def_levels.as_ref().map(|buf| {
+        slice::from_raw_parts(
+          transmute::<*const u8, *const i16>(buf.raw_data()),
+          buf.capacity() / size_of::<i16>())
+      })
+    }
   }
 
   pub fn reset(&mut self) -> Result<()> {
@@ -109,11 +125,11 @@ impl RecordReader {
   }
 
   pub fn set_page_reader(&mut self, page_reader: Box<PageReader>) -> Result<()> {
-    self.column_reader = get_column_reader(self.column_schema.clone(), page_reader);
+    self.column_reader = ColumnReaderImpl::new(self.column_schema.clone(), page_reader);
     Ok(())
   }
 
-  fn read_one_batch<T: DataType>(&mut self, batch_size: usize) -> Result<usize> {
+  fn read_one_batch(&mut self, batch_size: usize) -> Result<usize> {
     // Reserve spaces
     self.records.reserve(self.records.len()+batch_size*T::get_type_size())?;
     self.rep_levels.iter_mut().try_for_each(|buf| {
@@ -159,6 +175,7 @@ impl RecordReader {
           buf.capacity() / size_of::<i16>()-self.values_written)
         })
       };
+
       let def_levels_buf = def_levels_buf.ok_or_else(|| {
         general_err!("Definition levels should exist when data is less than levels!")
       })?;
@@ -175,6 +192,13 @@ impl RecordReader {
 
         level_pos -= 1;
       }
+    }
+
+    // Fill in bitmap data
+    if let Some(&mut notnull_buffer) = self.bitmaps {
+      (0..levels_read).for_each(|idx| {
+        notnull_buffer.append(def_levels_buf[idx] == self.column_schema.max_def_level())
+      })
     }
 
     let values_read = max(data_read, levels_read);
