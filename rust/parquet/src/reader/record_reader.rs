@@ -1,6 +1,7 @@
 use std::cmp::{min, max};
 use std::mem::transmute;
 use std::mem::size_of;
+use std::mem::replace;
 use std::slice;
 
 use arrow::buffer::MutableBuffer;
@@ -11,6 +12,8 @@ use crate::errors::ParquetError;
 use crate::schema::types::ColumnDescPtr;
 use crate::column::page::PageReader;
 use crate::column::reader::ColumnReaderImpl;
+use arrow::buffer::Buffer;
+use arrow::builder::BufferBuilderTrait;
 
 const MIN_BATCH_SIZE: usize = 1024;
 
@@ -94,6 +97,10 @@ impl<T: DataType> RecordReader<T> {
     Ok(records_read)
   }
 
+  pub fn records_num(&self) -> usize {
+    self.records_num
+  }
+
   pub fn records_data(&self) -> Result<&[u8]> {
     Ok(self.records.data())
   }
@@ -128,6 +135,27 @@ impl<T: DataType> RecordReader<T> {
     self.column_reader = ColumnReaderImpl::new(self.column_schema.clone(), page_reader);
     Ok(())
   }
+
+  pub fn consume_data(&mut self) -> Buffer {
+    replace(&mut self.records, MutableBuffer::new(MIN_BATCH_SIZE))
+        .freeze()
+  }
+
+  pub fn consume_null_bit_buffer(&mut self) -> Option<Buffer> {
+    let bitmap_builder = if self.column_schema.max_def_level()>0 {
+      Some(BooleanBufferBuilder::new(MIN_BATCH_SIZE))
+    } else {
+      None
+    };
+
+    replace(&mut self.bitmaps, bitmap_builder)
+        .map(|mut builder| builder.finish())
+  }
+
+  pub fn values_num(&mut self) -> usize {
+    self.values_written
+  }
+
 
   fn read_one_batch(&mut self, batch_size: usize) -> Result<usize> {
     // Reserve spaces
@@ -195,11 +223,11 @@ impl<T: DataType> RecordReader<T> {
     }
 
     // Fill in bitmap data
-    if let Some(&mut notnull_buffer) = self.bitmaps {
-      (0..levels_read).for_each(|idx| {
-        notnull_buffer.append(def_levels_buf[idx] == self.column_schema.max_def_level())
-      })
-    }
+//    if let Some(&mut notnull_buffer) = self.bitmaps {
+//      (0..levels_read).for_each(|idx| {
+//        notnull_buffer.append(def_levels_buf[idx] == self.column_schema.max_def_level())
+//      })
+//    }
 
     let values_read = max(data_read, levels_read);
     self.set_values_written(self.values_written+values_read)?;

@@ -1,23 +1,36 @@
 use std::sync::Arc;
+use std::vec::Vec;
 use std::mem::transmute;
 use arrow::array::Array;
-use arrow::builder::PrimitiveBuilder;
 use arrow::datatypes::DataType as ArrowType;
-use arrow::datatypes::ArrowPrimitiveType;
-use arrow::datatypes::*;
 use super::page_iterator::PageIterator;
-use super::record_reader::RecordReader;
 
 use crate::errors::Result;
 use crate::data_type::DataType;
 use crate::basic::Type;
-use arrow::builder::BooleanBuilder;
-use arrow::builder::BooleanBuilder;
-use std::slice::from_raw_parts;
+use crate::data_type::BoolType;
+use crate::data_type::Int32Type;
+use crate::data_type::Int64Type;
+use crate::data_type::FloatType;
+use crate::data_type::DoubleType;
+use crate::reader::converter::Converter;
+use crate::reader::converter::BooleanConverter;
+use crate::reader::record_reader::RecordReader;
+use crate::errors::ParquetError;
+use crate::reader::converter::Int8Converter;
+use crate::reader::converter::Int16Converter;
+use crate::reader::converter::Int32Converter;
+use crate::reader::converter::UInt8Converter;
+use crate::reader::converter::UInt16Converter;
+use crate::reader::converter::UInt32Converter;
+use crate::reader::converter::Int64Converter;
+use crate::reader::converter::UInt64Converter;
+use crate::reader::converter::Float32Converter;
+use crate::reader::converter::Float64Converter;
 
 
 pub trait ArrayReader {
-    fn next_batch(&mut self, batch_size: usize) -> Option<Result<Arc<Array>>>;
+    fn next_batch(&mut self, batch_size: usize) -> Result<Option<Arc<Array>>>;
 }
 
 
@@ -29,8 +42,8 @@ struct PrimitiveArrayReader<T: DataType> {
 }
 
 impl<T: DataType> ArrayReader for PrimitiveArrayReader<T> {
-    fn next_batch(&mut self, batch_size: usize) -> Option<Result<Arc<Array>>> {
-        self.record_reader.reset();
+    fn next_batch(&mut self, batch_size: usize) -> Result<Option<Arc<Array>>> {
+        self.record_reader.reset()?;
 
         let mut records_read = 0usize;
         while records_read < batch_size {
@@ -43,7 +56,7 @@ impl<T: DataType> ArrayReader for PrimitiveArrayReader<T> {
             if records_read_once < records_to_read {
                 if let Some(page_reader) = self.pages.next() {
                     // Read from new page reader
-                    self.record_reader.set_page_reader(page_reader?);
+                    self.record_reader.set_page_reader(page_reader?)?;
                 } else {
                     // Page reader also exhausted
                     break;
@@ -52,84 +65,65 @@ impl<T: DataType> ArrayReader for PrimitiveArrayReader<T> {
         }
 
         // Begin to convert to arrays
-        let records_data = self.record_reader.records_data()?;
-        let def_levels = self.record_reader.definition_levels_data();
-
-        let array = match (self.leaf_type, T::get_physical_type()) {
-            (ArrowType::Boolean, Type::BOOLEAN) =>
-                parquet_to_arrow_primitive::<BooleanType>(records_read, records_data,
-                                                          def_levels),
-            (ArrowType::Int8, Type::INT32) =>
-                parquet_to_arrow_primitive::<Int8Type>(records_read, records_data,
-                                                       def_levels),
-            (ArrowType::Int16, Type::INT32) =>
-                parquet_to_arrow_primitive::<Int16Type>(records_read, records_data,
-                                                        def_levels),
-            (ArrowType::Int32, Type::INT32) =>
-                parquet_to_arrow_primitive::<Int32Type>(records_read, records_data,
-                                                        def_levels),
-            (ArrowType::Int64, Type::INT64) =>
-                parquet_to_arrow_primitive::<Int64Type>(records_read, records_data,
-                                                        def_levels),
-            (ArrowType::UInt8, Type::INT32) =>
-                parquet_to_arrow_primitive::<UInt8Type>(records_read, records_data,
-                                                        def_levels),
-            (ArrowType::UInt16, Type::INT32) =>
-                parquet_to_arrow_primitive::<UInt16Type>(records_read, records_data,
-                                                         def_levels),
-
-            (ArrowType::UInt32, Type::INT32) =>
-                parquet_to_arrow_primitive::<UInt32Type>(records_read, records_data,
-                                                         def_levels),
-            (ArrowType::UInt64, Type::INT64) =>
-                parquet_to_arrow_primitive::<UInt64Type>(records_read, records_data,
-                                                         def_levels),
-
-            (ArrowType::Float32, Type::FLOAT) =>
-                parquet_to_arrow_primitive::<Float32Type>(records_read, records_data,
-                                                          def_levels),
-            (ArrowType::Float64, Type::DOUBLE) =>
-                parquet_to_arrow_primitive::<Float64Type>(records_read, records_data,
-                                                          def_levels),
+        let array = match (self.leaf_type.clone(), T::get_physical_type()) {
+            (ArrowType::Boolean, Type::BOOLEAN) => unsafe {
+                BooleanConverter::convert(transmute::<&mut RecordReader<T>,
+                    &mut RecordReader<BoolType>>(&mut self.record_reader))
+            },
+            (ArrowType::Int8, Type::INT32) => unsafe {
+                 Int8Converter::convert(transmute::<&mut RecordReader<T>,
+                    &mut RecordReader<Int32Type>>(&mut self.record_reader))
+            },
+            (ArrowType::Int16, Type::INT32) => unsafe {
+                Int16Converter::convert(transmute::<&mut RecordReader<T>,
+                    &mut RecordReader<Int32Type>>(&mut self.record_reader))
+            },
+            (ArrowType::Int32, Type::INT32) => unsafe {
+                Int32Converter::convert(transmute::<&mut RecordReader<T>,
+                    &mut RecordReader<Int32Type>>(&mut self.record_reader))
+            },
+            (ArrowType::UInt8, Type::INT32) => unsafe {
+                UInt8Converter::convert(transmute::<&mut RecordReader<T>,
+                    &mut RecordReader<Int32Type>>(&mut self.record_reader))
+            },
+            (ArrowType::UInt16, Type::INT32) => unsafe {
+                UInt16Converter::convert(transmute::<&mut RecordReader<T>,
+                    &mut RecordReader<Int32Type>>(&mut self.record_reader))
+            },
+            (ArrowType::UInt32, Type::INT32) => unsafe {
+                UInt32Converter::convert(transmute::<&mut RecordReader<T>,
+                    &mut RecordReader<Int32Type>>(&mut self.record_reader))
+            },
+            (ArrowType::Int64, Type::INT64) => unsafe {
+                Int64Converter::convert(transmute::<&mut RecordReader<T>,
+                    &mut RecordReader<Int64Type>>(&mut self.record_reader))
+            },
+            (ArrowType::UInt64, Type::INT64) => unsafe {
+                UInt64Converter::convert(transmute::<&mut RecordReader<T>,
+                    &mut RecordReader<Int64Type>>(&mut self.record_reader))
+            },
+            (ArrowType::Float32, Type::FLOAT) => unsafe {
+                Float32Converter::convert(transmute::<&mut RecordReader<T>,
+                    &mut RecordReader<FloatType>>(&mut self.record_reader))
+            },
+            (ArrowType::Float64, Type::DOUBLE) => unsafe {
+                Float64Converter::convert(transmute::<&mut RecordReader<T>,
+                    &mut RecordReader<DoubleType>>(&mut self.record_reader))
+            },
             (arrow_type, _) => Err(general_err!(
             "Reading {:?} type from parquet is not supported yet.", arrow_type))
         }?;
+        Ok(Some(array))
     }
 }
 
-
-fn parquet_to_arrow_primitive<T: ArrowPrimitiveType, P: DataType>(size: usize, data: &[u8],
-                         def_levels: Option<&[i16]>) -> Result<Arc<Array>> {
-    //TODO: Optimize this to use mutable buffer directly
-    let data_ptr = unsafe {
-        transmute::<*const u8, *const P::T>(data.as_ptr())
-    };
-    let data_slices = unsafe {
-        from_raw_parts(data_ptr, size)
-    };
-
-
-
-    let mut builder = PrimitiveBuidler::<T>::new(size);
-
-    match def_levels {
-        Some(null_values) => {
-            data_slices.iter().zip(null_values.iter())
-                .for_each(|(data, is_null)| {
-                    if *is_null > 0 {
-                        builder.append_null()
-                    } else {
-                        builder.append_value(data as T::Native)
-                    }
-                })
-        }
-
-        None => {
-            data_slices.iter()
-                .for_each(|v| builder.append_value(v as T::Native))
-        }
-    };
-
-    builder.finish()
+struct StructArrayReader {
+    children: Vec<Box<dyn ArrayReader>>,
+    def_level: i16
 }
 
+impl ArrayReader for StructArrayReader {
+    fn next_batch(&mut self, batch_size: usize) -> Result<Option<Arc<Array>>> {
+        unimplemented!()
+    }
+}

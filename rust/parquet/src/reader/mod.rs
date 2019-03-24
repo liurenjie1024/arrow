@@ -24,5 +24,6 @@ pub mod schema;
 pub mod record_reader;
 pub mod array_reader;
 mod page_iterator;
+mod converter;
 
 pub use self::schema::{parquet_to_arrow_schema, parquet_to_arrow_schema_by_columns};
