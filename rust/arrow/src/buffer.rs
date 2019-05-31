@@ -22,6 +22,7 @@ use packed_simd::u8x64;
 
 use std::cmp;
 use std::fmt::{Debug, Formatter};
+use std::convert::AsRef;
 use std::io::{Error as IoError, ErrorKind, Result as IoResult, Write};
 use std::mem;
 use std::ops::{BitAnd, BitOr, Not};
@@ -167,6 +168,25 @@ impl<T: AsRef<[u8]>> From<T> for Buffer {
         Buffer::from_raw_parts(buffer, len)
     }
 }
+
+
+/// Allow a `Buffer` to be viewed as slice of arrow native types.
+macro_rules! make_as_ref {
+   ($native_ty: ty) => {
+    impl AsRef<[$native_ty]> for Buffer {
+        fn as_ref(&self) -> &[$native_ty] {
+            assert_eq!(self.len() % mem::size_of::<$native_ty>(), 0);
+            unsafe {
+                from_raw_parts(mem::transmute::<*const u8, *const $native_ty>(self.raw_data()),
+                    self.len() / mem::size_of::<$native_ty>())
+            }
+        }
+    }
+   }
+}
+
+make_as_ref!(i8);
+make_as_ref!(u8);
 
 ///  Helper function for SIMD `BitAnd` and `BitOr` implementations
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
