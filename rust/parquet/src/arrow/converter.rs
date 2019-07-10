@@ -5,12 +5,12 @@ use std::convert::From;
 use std::sync::Arc;
 
 use crate::errors::Result;
-use arrow::builder::BufferBuilder;
-use arrow::builder::BufferBuilderTrait;
+use arrow::array::BufferBuilder;
+use arrow::array::BufferBuilderTrait;
 use arrow::datatypes::ArrowPrimitiveType;
 
+use arrow::array::ArrayDataBuilder;
 use arrow::array::PrimitiveArray;
-use arrow::array_data::ArrayDataBuilder;
 use std::marker::PhantomData;
 use std::mem::transmute;
 
@@ -116,8 +116,14 @@ where
     ArrowType: ArrowPrimitiveType,
 {
     fn convert(record_reader: &mut RecordReader<ParquetType>) -> Result<Arc<Array>> {
+        let record_data = record_reader.consume_record_data();
+
         let mut array_data = ArrayDataBuilder::new(ArrowType::get_data_type())
-            .add_buffer(record_reader.consume_record_data());
+            .len(
+                record_data.len() * 8
+                    / <ArrowType as ArrowPrimitiveType>::get_bit_width(),
+            )
+            .add_buffer(record_data);
 
         if let Some(b) = record_reader.consume_bitmap_buffer() {
             array_data = array_data.null_bit_buffer(b);

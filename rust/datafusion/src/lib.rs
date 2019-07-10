@@ -20,7 +20,9 @@
 
 #![warn(missing_docs)]
 #![allow(bare_trait_objects)]
-
+#![allow(bare_trait_objects)]
+#[macro_use]
+extern crate clap;
 extern crate arrow;
 #[macro_use]
 extern crate serde_derive;

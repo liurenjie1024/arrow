@@ -10,15 +10,15 @@ use std::slice::from_raw_parts_mut;
 use std::sync::Arc;
 use std::vec::Vec;
 
+use arrow::array::{ArrayDataBuilder, Int32BufferBuilder};
+use arrow::array::ArrayDataRef;
+use arrow::array::BufferBuilderTrait;
 use arrow::array::StructArray;
 use arrow::array::{Array, ListArray};
-use arrow::array_data::ArrayDataBuilder;
-use arrow::array_data::ArrayDataRef;
+use arrow::array::{BooleanBufferBuilder, Int16BufferBuilder};
 use arrow::bitmap::Bitmap;
 use arrow::buffer::Buffer;
 use arrow::buffer::MutableBuffer;
-use arrow::builder::BufferBuilderTrait;
-use arrow::builder::{BooleanBufferBuilder, Int16BufferBuilder};
 use arrow::datatypes::DataType::List;
 use arrow::datatypes::{DataType as ArrowType, Field};
 
@@ -67,14 +67,24 @@ pub struct PrimitiveArrayReader<T: DataType> {
     rep_levels_buffer: Option<Buffer>,
     null_bitmap: Option<Bitmap>,
     column_desc: ColumnDescPtr,
+    record_reader: RecordReader<T>,
     _type_marker: PhantomData<T>,
 }
 
 impl<T: DataType> PrimitiveArrayReader<T> {
-    pub fn new(pages: Box<PageIterator>, column_desc: ColumnDescPtr) -> Result<Self> {
+    pub fn new(mut pages: Box<PageIterator>, column_desc: ColumnDescPtr) -> Result<Self> {
         let data_type = parquet_to_arrow_field(column_desc.clone())?
             .data_type()
             .clone();
+
+        let mut record_reader = RecordReader::<T>::new(column_desc.clone());
+        record_reader.set_page_reader(pages.next().ok_or_else(|| {
+            general_err!(
+                "Can't \
+                 build array without pages!"
+            )
+        })??)?;
+
         Ok(Self {
             data_type,
             pages,
@@ -82,6 +92,7 @@ impl<T: DataType> PrimitiveArrayReader<T> {
             rep_levels_buffer: None,
             null_bitmap: None,
             column_desc,
+            record_reader,
             _type_marker: PhantomData,
         })
     }
@@ -93,20 +104,18 @@ impl<T: DataType> ArrayReader for PrimitiveArrayReader<T> {
     }
 
     fn next_batch(&mut self, batch_size: usize) -> Result<Arc<Array>> {
-        let mut record_reader = RecordReader::<T>::new(self.column_desc.clone());
-
         let mut records_read = 0usize;
         while records_read < batch_size {
             let records_to_read = batch_size - records_read;
 
-            let records_read_once = record_reader.read_records(records_to_read)?;
+            let records_read_once = self.record_reader.read_records(records_to_read)?;
             records_read = records_read + records_read_once;
 
             // Record reader exhausted
             if records_read_once < records_to_read {
                 if let Some(page_reader) = self.pages.next() {
                     // Read from new page reader
-                    record_reader.set_page_reader(page_reader?)?;
+                    self.record_reader.set_page_reader(page_reader?)?;
                 } else {
                     // Page reader also exhausted
                     break;
@@ -124,67 +133,67 @@ impl<T: DataType> ArrayReader for PrimitiveArrayReader<T> {
                 BooleanConverter::convert(transmute::<
                     &mut RecordReader<T>,
                     &mut RecordReader<BoolType>,
-                >(&mut record_reader))
+                >(&mut self.record_reader))
             },
             (ArrowType::Int8, PhysicalType::INT32) => unsafe {
                 Int8Converter::convert(transmute::<
                     &mut RecordReader<T>,
                     &mut RecordReader<Int32Type>,
-                >(&mut record_reader))
+                >(&mut self.record_reader))
             },
             (ArrowType::Int16, PhysicalType::INT32) => unsafe {
                 Int16Converter::convert(transmute::<
                     &mut RecordReader<T>,
                     &mut RecordReader<Int32Type>,
-                >(&mut record_reader))
+                >(&mut self.record_reader))
             },
             (ArrowType::Int32, PhysicalType::INT32) => unsafe {
                 Int32Converter::convert(transmute::<
                     &mut RecordReader<T>,
                     &mut RecordReader<Int32Type>,
-                >(&mut record_reader))
+                >(&mut self.record_reader))
             },
             (ArrowType::UInt8, PhysicalType::INT32) => unsafe {
                 UInt8Converter::convert(transmute::<
                     &mut RecordReader<T>,
                     &mut RecordReader<Int32Type>,
-                >(&mut record_reader))
+                >(&mut self.record_reader))
             },
             (ArrowType::UInt16, PhysicalType::INT32) => unsafe {
                 UInt16Converter::convert(transmute::<
                     &mut RecordReader<T>,
                     &mut RecordReader<Int32Type>,
-                >(&mut record_reader))
+                >(&mut self.record_reader))
             },
             (ArrowType::UInt32, PhysicalType::INT32) => unsafe {
                 UInt32Converter::convert(transmute::<
                     &mut RecordReader<T>,
                     &mut RecordReader<Int32Type>,
-                >(&mut record_reader))
+                >(&mut self.record_reader))
             },
             (ArrowType::Int64, PhysicalType::INT64) => unsafe {
                 Int64Converter::convert(transmute::<
                     &mut RecordReader<T>,
                     &mut RecordReader<Int64Type>,
-                >(&mut record_reader))
+                >(&mut self.record_reader))
             },
             (ArrowType::UInt64, PhysicalType::INT64) => unsafe {
                 UInt64Converter::convert(transmute::<
                     &mut RecordReader<T>,
                     &mut RecordReader<Int64Type>,
-                >(&mut record_reader))
+                >(&mut self.record_reader))
             },
             (ArrowType::Float32, PhysicalType::FLOAT) => unsafe {
                 Float32Converter::convert(transmute::<
                     &mut RecordReader<T>,
                     &mut RecordReader<FloatType>,
-                >(&mut record_reader))
+                >(&mut self.record_reader))
             },
             (ArrowType::Float64, PhysicalType::DOUBLE) => unsafe {
                 Float64Converter::convert(transmute::<
                     &mut RecordReader<T>,
                     &mut RecordReader<DoubleType>,
-                >(&mut record_reader))
+                >(&mut self.record_reader))
             },
             (arrow_type, _) => Err(general_err!(
                 "Reading {:?} type from parquet is not supported yet.",
@@ -192,10 +201,11 @@ impl<T: DataType> ArrayReader for PrimitiveArrayReader<T> {
             )),
         }?;
 
+        //        dbg!(array.as_any().type_id());
         // save definition and repetition buffers
-        self.def_levels_buffer = record_reader.consume_def_levels();
-        self.rep_levels_buffer = record_reader.consume_rep_levels();
-        self.null_bitmap = record_reader.consume_bitmap();
+        self.def_levels_buffer = self.record_reader.consume_def_levels();
+        self.rep_levels_buffer = self.record_reader.consume_rep_levels();
+        self.null_bitmap = self.record_reader.consume_bitmap();
         Ok(array)
     }
 
@@ -270,6 +280,9 @@ impl ArrayReader for StructArrayReader {
 
         // check that array child data has same size
         let children_array_len = children_array.first().unwrap().len();
+        dbg!(self.get_data_type());
+        dbg!(children_array_len);
+
         let all_children_len_eq = children_array
             .iter()
             .all(|arr| arr.len() == children_array_len);
@@ -404,7 +417,7 @@ impl ArrayReader for ListArrayReader {
     fn next_batch(&mut self, batch_size: usize) -> Result<Arc<Array>> {
         let child_array = self.child.next_batch(batch_size)?;
 
-        let mut offset_builder = Int16BufferBuilder::new(child_array.len());
+        let mut offset_builder = Int32BufferBuilder::new(child_array.len());
         let mut null_bitmap_builder = BooleanBufferBuilder::new(child_array.len());
         let mut rep_level_builder = Int16BufferBuilder::new(child_array.len());
         let mut def_level_builder = Int16BufferBuilder::new(child_array.len());
@@ -436,7 +449,7 @@ impl ArrayReader for ListArrayReader {
             for idx in 1..child_array.len() {
                 if child_rep_levels[idx] != self.rep_level {
                     len = len + 1;
-                    offset_builder.append(idx as i16)?;
+                    offset_builder.append(idx as i32)?;
                     rep_level_builder.append(cur_rep_level)?;
                     def_level_builder.append(cur_def_level)?;
 
@@ -448,16 +461,21 @@ impl ArrayReader for ListArrayReader {
             }
 
             null_bitmap_builder.append(cur_def_level >= self.def_level)?;
+            rep_level_builder.append(cur_rep_level)?;
+            def_level_builder.append(cur_def_level)?;
         }
 
         self.rep_level_buffer = Some(rep_level_builder.finish());
+        dbg!(self.rep_level_buffer.as_ref().map(|x| x.len()).unwrap());
         self.def_level_buffer = Some(def_level_builder.finish());
+        dbg!(self.def_level_buffer.as_ref().map(|x| x.len()).unwrap());
 
         let offset_buffer = offset_builder.finish();
+        dbg!(offset_buffer.typed_data::<i32>());
         let null_bitmap = null_bitmap_builder.finish();
 
         let array_data = ArrayDataBuilder::new(arrow_type)
-            .len(len)
+            .len(dbg!(len))
             .add_buffer(offset_buffer)
             .null_bit_buffer(null_bitmap)
             .add_child_data(child_array.data())
@@ -592,35 +610,38 @@ impl<'a> TypeVisitor<Option<Box<ArrayReader>>, &'a ArrayReaderBuilderContext>
         cur_type: Rc<Type>,
         context: &'a ArrayReaderBuilderContext,
     ) -> Result<Option<Box<ArrayReader>>> {
-        let mut fields = Vec::with_capacity(cur_type.get_fields().len());
-        let mut children_reader = Vec::with_capacity(cur_type.get_fields().len());
 
         let mut new_context = context.clone();
         new_context.path.append(vec![cur_type.name().to_string()]);
-        if cur_type.is_optional() {
-            new_context.def_level += 1;
-        }
 
-        for child in cur_type.get_fields() {
-            if self.is_included(child.as_ref()) {
-                let child_reader = self.dispatch(child.clone(), context)?.unwrap();
-                fields.push(Field::new(
-                    child.name(),
-                    child_reader.get_data_type().clone(),
-                    child.is_optional(),
-                ));
-                children_reader.push(child_reader);
+
+        if cur_type.get_basic_info().has_repetition() {
+            match cur_type.get_basic_info().repetition() {
+                Repetition::REPEATED => {
+                    new_context.def_level += 1;
+                    new_context.rep_level += 1;
+                }
+                Repetition::OPTIONAL => {
+                    new_context.def_level += 1;
+                }
+                _ => (),
             }
         }
 
-        if !fields.is_empty() {
-            let arrow_type = ArrowType::Struct(fields);
-            Ok(Some(Box::new(StructArrayReader::new(
-                arrow_type,
-                children_reader,
-                new_context.def_level,
-                new_context.rep_level,
-            ))))
+        if let Some(reader) =
+            self.build_for_struct_type_inner(cur_type.clone(), &new_context)?
+        {
+            if cur_type.get_basic_info().has_repetition() && cur_type.get_basic_info()
+            .repetition() ==
+                Repetition::REPEATED {
+                Ok(Some(Box::new(ListArrayReader::new(
+                    reader,
+                    new_context.rep_level,
+                    new_context.def_level,
+                ))))
+            } else {
+                Ok(Some(reader))
+            }
         } else {
             Ok(None)
         }
@@ -736,6 +757,38 @@ impl<'a> ArrayReaderBuilder {
                 "Unable to create primite array reader for parquet physical type {}",
                 other
             ))),
+        }
+    }
+
+    fn build_for_struct_type_inner(
+        &mut self,
+        cur_type: TypePtr,
+        context: &'a ArrayReaderBuilderContext,
+    ) -> Result<Option<Box<ArrayReader>>> {
+        let mut fields = Vec::with_capacity(cur_type.get_fields().len());
+        let mut children_reader = Vec::with_capacity(cur_type.get_fields().len());
+
+        for child in cur_type.get_fields() {
+            if let Some(child_reader) = self.dispatch(child.clone(), context)? {
+                fields.push(Field::new(
+                    child.name(),
+                    child_reader.get_data_type().clone(),
+                    child.is_optional(),
+                ));
+                children_reader.push(child_reader);
+            }
+        }
+
+        if !fields.is_empty() {
+            let arrow_type = ArrowType::Struct(fields);
+            Ok(Some(Box::new(StructArrayReader::new(
+                arrow_type,
+                children_reader,
+                context.def_level,
+                context.rep_level,
+            ))))
+        } else {
+            Ok(None)
         }
     }
 }
