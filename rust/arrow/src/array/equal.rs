@@ -18,6 +18,10 @@
 use super::*;
 use crate::datatypes::*;
 use crate::util::bit_util;
+use serde_json::{Value, Number};
+use std::vec::Vec;
+use crate::datatypes::DataType::Struct;
+use serde_json::value::Value::Object;
 
 /// Trait for `Array` equality.
 pub trait ArrayEqual {
@@ -34,6 +38,7 @@ pub trait ArrayEqual {
         other_start_idx: usize,
     ) -> bool;
 }
+
 
 impl<T: ArrowPrimitiveType> ArrayEqual for PrimitiveArray<T> {
     default fn equals(&self, other: &dyn Array) -> bool {
@@ -99,6 +104,7 @@ impl<T: ArrowPrimitiveType> ArrayEqual for PrimitiveArray<T> {
     }
 }
 
+
 impl ArrayEqual for BooleanArray {
     fn equals(&self, other: &dyn Array) -> bool {
         if !base_equal(&self.data(), &other.data()) {
@@ -125,7 +131,7 @@ impl ArrayEqual for BooleanArray {
 
 impl<T: ArrowNumericType> PartialEq for PrimitiveArray<T> {
     fn eq(&self, other: &PrimitiveArray<T>) -> bool {
-        self.equals(other)
+        self.eq(other)
     }
 }
 
@@ -416,6 +422,114 @@ fn value_offset_equal<T: Array + ListArrayOps>(this: &T, other: &T) -> bool {
     }
 
     true
+}
+
+/// Trait for comparing array with json array
+pub trait JsonEqual {
+    fn equals(&self, json: &[Value]) -> bool;
+}
+
+/// Implement array equals for numeric type
+impl<T:ArrowPrimitiveType> JsonEqual for PrimitiveArray<T>
+    where Number: From<<T as ArrowPrimitiveType>::Native>
+{
+    fn equals(&self, json: &[Value]) -> bool {
+        if self.len() != json.len() {
+            return false;
+        }
+
+        for i in 0..self.len() {
+            let row_eq = match json[i] {
+                Value::Number(num) if self.is_valid(i) => num == Number::from(self
+                    .value(i)),
+                Value::Null => self.is_null(i),
+                _ => false
+            };
+
+            if !row_eq {
+                return false;
+            }
+        }
+
+        return true;
+    }
+}
+
+/// Implement array equals for boolean type
+impl JsonEqual for BooleanArray {
+    fn equals(&self, json: &[Value]) -> bool {
+        if self.len() != json.len() {
+            return false;
+        }
+
+        for i in 0..self.len() {
+            let value_equal = match json[i] {
+                Value::Bool(b) => self.is_valid(i) && self.value(i)==b,
+                Value::Null => self.is_null(i),
+                _ => false
+            };
+
+            if !value_equal {
+                return false;
+            }
+        }
+
+        return true;
+    }
+}
+
+impl JsonEqual for ListArray {
+    fn equals(&self, json: &[Value]) -> bool {
+        if self.len() != json.len() {
+            return false;
+        }
+
+        for i in 0..self.len() {
+            let value_equal = match json[i] {
+                Value::Array(v) => self.is_valid(i) && self.value_length(i) == v.len()
+                    && self.values().slice(self.value_offset(i) as usize, self
+                    .value_length(i) as usize)
+                    .equals(v.as_slice()),
+                Value::Null => self.is_null(i),
+                _ => false
+            };
+
+            if !value_equal  {
+                return false;
+            }
+        }
+
+        return true;
+    }
+}
+
+impl JsonEqual for StructArray {
+    fn equals(&self, json: &[Value]) -> bool {
+        if self.len() != json.len() {
+            return false;
+        }
+
+        let all_object = json.iter().all(|v| match v {
+            Object(_)=>true,
+            _ => false
+        });
+
+        if !all_object {
+            return false;
+        }
+
+        for column_name in self.column_names() {
+            let json_values = json.iter()
+                .map(|obj| obj.get(column_name).unwrap())
+                .collect::<Vec<&Value>>();
+
+            if !self.column_by_name(column_name).equals(json_values) {
+                return false;
+            }
+        }
+
+        return true;
+    }
 }
 
 #[cfg(test)]

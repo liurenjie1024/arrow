@@ -30,6 +30,7 @@ use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
 use crate::memory;
 use crate::util::bit_util;
+use crate::datatypes::DataType::Struct;
 
 /// Number of seconds in a day
 const SECONDS_IN_DAY: i64 = 86_400;
@@ -993,6 +994,22 @@ impl StructArray {
     /// Return the number of fields in this struct array
     pub fn num_columns(&self) -> usize {
         self.boxed_fields.len()
+    }
+
+    /// Return field names in this struct array
+    pub fn column_names(&self) -> Vec<&str> {
+        match self.data.data_type() {
+            Struct(fields) => fields.iter()
+                .map(|f| f.name().as_str())
+                .collect::<Vec<&str>>(),
+            _ => panic!("Struct array's data type is not struct!")
+        }
+    }
+
+    pub fn column_by_name(&self, column_name: &str) -> Option<&ArrayRef > {
+        self.column_names().iter().position(|c| c == column_name)
+            .map(|pos| self.column(pos))
+
     }
 }
 
