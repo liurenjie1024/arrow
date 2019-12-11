@@ -61,7 +61,7 @@ services:
   #     conda-cpp|debian-cpp|...
   # Minimum boost - Ubuntu Xenial 16.04 has Boost 1.58:
   #   UBUNTU=16.04 docker-compose build \
-  #     -e ARROW_BOOST_SOURCE=SYSTEM \
+  #     -e BOOST_SOURCE=SYSTEM \
   #     ubuntu-cpp
 
   conda-cpp:
@@ -461,12 +461,12 @@ services:
         cmake: 3.2.3
     environment:
       <<: *ccache
-      # Vendor boost to avoid dealing with stale FindBoost.
-      ARROW_BOOST_SOURCE: "BUNDLED"
       ARROW_ORC: "OFF"
       ARROW_GANDIVA: "OFF"
       # uriparser requires cmake 3.3
       ARROW_FLIGHT: "OFF"
+      # Vendor boost to avoid dealing with stale FindBoost.
+      BOOST_SOURCE: "BUNDLED"
     volumes: *ubuntu-volumes
     command: *cpp-command
 
@@ -579,8 +579,8 @@ services:
   centos-python-manylinux2010:
     image: ${REPO}:amd64-centos-6.10-python-manylinux2010
     build:
-      context: python/manylinux2010
-      dockerfile: Dockerfile-x86_64_base
+      context: python/manylinux201x
+      dockerfile: Dockerfile-x86_64_base_2010
       cache_from:
         - ${REPO}:amd64-centos-6.10-python-manylinux2010
     shm_size: *shm-size
@@ -590,7 +590,24 @@ services:
       UNICODE_WIDTH: ${UNICODE_WIDTH:-16}
     volumes:
       - .:/arrow:delegated
-      - ./python/manylinux2010:/io:delegated
+      - ./python/manylinux201x:/io:delegated
+    command: *manylinux-command
+
+  centos-python-manylinux2014:
+    image: ${REPO}:amd64-centos-7.7-python-manylinux2014
+    build:
+      context: python/manylinux201x
+      dockerfile: Dockerfile-x86_64_base_2014
+      cache_from:
+        - ${REPO}:amd64-centos-7.7-python-manylinux2014
+    shm_size: *shm-size
+    environment:
+      PYARROW_PARALLEL: 3
+      PYTHON_VERSION: ${PYTHON_VERSION:-3.6}
+      UNICODE_WIDTH: ${UNICODE_WIDTH:-16}
+    volumes:
+      - .:/arrow:delegated
+      - ./python/manylinux201x:/io:delegated
     command: *manylinux-command
 
   ################################## R ########################################
@@ -679,6 +696,8 @@ services:
         arch: ${ARCH}
         rust: ${RUST}
     shm_size: *shm-size
+    environment:
+      CARGO_HOME: /build/cargo
     volumes: *debian-volumes
     command: &rust-command >
       /bin/bash -c "
@@ -905,12 +924,11 @@ services:
       args:
         base: ${REPO}:${ARCH}-ubuntu-${UBUNTU}-cpp
     environment:
+      <<: *ccache
       FUZZIT_API_KEY: c0b760d37db6012fcaafd8ca5f412ba7bcd297ac969650502994b51aa11798153824442f999a067e1ef67821989ed664
       FUZZIT_HOST: bionic-llvm7
       CI_ARROW_SHA: ${CI_ARROW_SHA:-UNSET}
       CI_ARROW_BRANCH: ${CI_ARROW_BRANCH:-UNSET}
-    environment:
-      <<: *ccache
     volumes: *debian-volumes
     command: >
       /bin/bash -c "
