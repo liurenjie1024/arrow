@@ -49,6 +49,7 @@ pub trait BufferBuilderTrait<T: ArrowPrimitiveType> {
     fn append(&mut self, v: T::Native) -> Result<()>;
     fn append_slice(&mut self, slice: &[T::Native]) -> Result<()>;
     fn finish(&mut self) -> Buffer;
+    unsafe fn finish_shared(&mut self) -> Buffer;
 }
 
 impl<T: ArrowPrimitiveType> BufferBuilderTrait<T> for BufferBuilder<T> {
@@ -107,6 +108,12 @@ impl<T: ArrowPrimitiveType> BufferBuilderTrait<T> for BufferBuilder<T> {
         let buf = ::std::mem::replace(&mut self.buffer, MutableBuffer::new(0));
         self.len = 0;
         buf.freeze()
+    }
+    
+    default unsafe fn finish_shared(&mut self) -> Buffer {
+        let buffer = self.buffer.freeze_shared();
+        self.len = 0;
+        buffer
     }
 }
 
@@ -204,6 +211,15 @@ impl BufferBuilderTrait<BooleanType> for BufferBuilder<BooleanType> {
         self.len = 0;
         buf.resize(new_buffer_len).unwrap();
         buf.freeze()
+    }
+    
+    unsafe fn finish_shared(&mut self) -> Buffer {
+        // `append` does not update the buffer's `len` so do it before `freeze` is called.
+        let new_buffer_len = bit_util::ceil(self.len, 8);
+        debug_assert!(new_buffer_len >= self.buffer.len());
+        self.len = 0;
+        self.buffer.resize(new_buffer_len).expect("Boolean buffer resized failed!");
+        self.buffer.freeze_shared()
     }
 }
 

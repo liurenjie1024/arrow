@@ -31,7 +31,7 @@ use crate::error::{ArrowError, Result};
 #[derive(Clone)]
 pub struct RecordBatch {
     schema: Arc<Schema>,
-    columns: Vec<Arc<Array>>,
+    columns: Vec<ArrayRef>,
 }
 
 impl RecordBatch {
@@ -65,7 +65,7 @@ impl RecordBatch {
             }
             if columns[i].data_type() != schema.field(i).data_type() {
                 return Err(ArrowError::InvalidArgumentError(format!(
-                    "column types must match schema types, expected {:?} but found {:?} at column index {}", 
+                    "column types must match schema types, expected {:?} but found {:?} at column index {}",
                     schema.field(i).data_type(),
                     columns[i].data_type(),
                     i)));
@@ -73,7 +73,7 @@ impl RecordBatch {
         }
         Ok(RecordBatch { schema, columns })
     }
-
+    
     /// Returns the schema of the record batch
     pub fn schema(&self) -> &Arc<Schema> {
         &self.schema
@@ -98,6 +98,10 @@ impl RecordBatch {
     pub fn columns(&self) -> &[ArrayRef] {
         &self.columns[..]
     }
+    
+    pub fn columns_mut(&mut self) -> &mut [ArrayRef] {
+        &mut self.columns[..]
+    }
 }
 
 impl From<&StructArray> for RecordBatch {
@@ -110,7 +114,7 @@ impl From<&StructArray> for RecordBatch {
             let columns = struct_array.boxed_fields.clone();
             RecordBatch {
                 schema: Arc::new(schema),
-                columns,
+                columns
             }
         } else {
             unreachable!("unable to get datatype as struct")

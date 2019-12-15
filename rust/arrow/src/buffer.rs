@@ -482,6 +482,18 @@ impl MutableBuffer {
             offset: 0,
         }
     }
+    
+    pub unsafe fn freeze_shared(&mut self) -> Buffer {
+        let buffer_data = BufferData {
+            ptr: self.data,
+            len: self.len,
+            owned: false,
+        };
+        Buffer {
+            data: Arc::new(buffer_data),
+            offset: 0,
+        }
+    }
 }
 
 impl Drop for MutableBuffer {

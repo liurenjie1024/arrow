@@ -107,12 +107,15 @@ pub fn get_typed_column_reader<T: DataType>(
     }
 }
 
+pub type PageReaderIterator = dyn Iterator<Item = Result<Box<dyn PageReader>>>;
+
 /// Typed value reader for a particular primitive column.
 pub struct ColumnReaderImpl<T: DataType> {
-    descr: ColumnDescPtr,
+    desc: ColumnDescPtr,
     def_level_decoder: Option<LevelDecoder>,
     rep_level_decoder: Option<LevelDecoder>,
-    page_reader: Box<PageReader>,
+    page_reader_iterator: Box<PageReaderIterator>,
+    current_page_reader: Option<Box<dyn PageReader>>,
     current_encoding: Option<Encoding>,
 
     // The total number of values stored in the data page.
@@ -128,19 +131,35 @@ pub struct ColumnReaderImpl<T: DataType> {
 
 impl<T: DataType> ColumnReaderImpl<T> {
     /// Creates new column reader based on column descriptor and page reader.
-    pub fn new(descr: ColumnDescPtr, page_reader: Box<PageReader>) -> Self {
+    pub fn new(desc: ColumnDescPtr, page_reader: Box<dyn PageReader>) -> Self {
         Self {
-            descr,
+            desc,
             def_level_decoder: None,
             rep_level_decoder: None,
-            page_reader,
+            page_reader_iterator: Box::new(Some(Ok(page_reader)).into_iter()) as Box<PageReaderIterator>,
+            current_page_reader: None,
             current_encoding: None,
             num_buffered_values: 0,
             num_decoded_values: 0,
             decoders: HashMap::new(),
         }
     }
-
+    
+    pub fn with_page_iterator(desc: ColumnDescPtr, page_reader_iterator: Box<PageReaderIterator>)
+        -> Result<Self> {
+        Ok(Self {
+            desc,
+            def_level_decoder: None,
+            rep_level_decoder: None,
+            page_reader_iterator,
+            current_page_reader: None,
+            current_encoding: None,
+            num_buffered_values: 0,
+            num_decoded_values: 0,
+            decoders: HashMap::new(),
+        })
+    }
+    
     /// Reads a batch of values of at most `batch_size`.
     ///
     /// This will try to read from the row group, and fills up at most `batch_size` values
@@ -214,13 +233,13 @@ impl<T: DataType> ColumnReaderImpl<T> {
             let mut num_rep_levels = 0;
 
             // If the field is required and non-repeated, there are no definition levels
-            if self.descr.max_def_level() > 0 && def_levels.as_ref().is_some() {
+            if self.desc.max_def_level() > 0 && def_levels.as_ref().is_some() {
                 if let Some(ref mut levels) = def_levels {
                     num_def_levels = self.read_def_levels(
                         &mut levels[levels_read..levels_read + iter_batch_size],
                     )?;
                     for i in levels_read..levels_read + num_def_levels {
-                        if levels[i] == self.descr.max_def_level() {
+                        if levels[i] == self.desc.max_def_level() {
                             values_to_read += 1;
                         }
                     }
@@ -232,7 +251,7 @@ impl<T: DataType> ColumnReaderImpl<T> {
                 values_to_read = iter_batch_size;
             }
 
-            if self.descr.max_rep_level() > 0 && rep_levels.is_some() {
+            if self.desc.max_rep_level() > 0 && rep_levels.is_some() {
                 if let Some(ref mut levels) = rep_levels {
                     num_rep_levels = self.read_rep_levels(
                         &mut levels[levels_read..levels_read + iter_batch_size],
@@ -276,11 +295,22 @@ impl<T: DataType> ColumnReaderImpl<T> {
     /// Reads a new page and set up the decoders for levels, values or dictionary.
     /// Returns false if there's no page left.
     fn read_new_page(&mut self) -> Result<bool> {
-        #[allow(while_true)]
-        while true {
-            match self.page_reader.get_next_page()? {
+        loop {
+            if self.current_page_reader.is_none() {
+                match self.page_reader_iterator.next() {
+                    Some(page_reader_result) => {
+                        self.current_page_reader = Some(page_reader_result?);
+                    },
+                    None => return Ok(false)
+                }
+            }
+            
+            let page_reader = self.current_page_reader.as_mut()
+                .expect("Page reader should not be empty!");
+            
+            match page_reader.get_next_page()? {
                 // No more page to read
-                None => return Ok(false),
+                None => continue,
                 Some(current_page) => {
                     match current_page {
                         // 1. Dictionary page: configure dictionary for this page.
@@ -302,10 +332,10 @@ impl<T: DataType> ColumnReaderImpl<T> {
 
                             let mut buffer_ptr = buf;
 
-                            if self.descr.max_rep_level() > 0 {
+                            if self.desc.max_rep_level() > 0 {
                                 let mut rep_decoder = LevelDecoder::v1(
                                     rep_level_encoding,
-                                    self.descr.max_rep_level(),
+                                    self.desc.max_rep_level(),
                                 );
                                 let total_bytes = rep_decoder.set_data(
                                     self.num_buffered_values as usize,
@@ -315,10 +345,10 @@ impl<T: DataType> ColumnReaderImpl<T> {
                                 self.rep_level_decoder = Some(rep_decoder);
                             }
 
-                            if self.descr.max_def_level() > 0 {
+                            if self.desc.max_def_level() > 0 {
                                 let mut def_decoder = LevelDecoder::v1(
                                     def_level_encoding,
-                                    self.descr.max_def_level(),
+                                    self.desc.max_def_level(),
                                 );
                                 let total_bytes = def_decoder.set_data(
                                     self.num_buffered_values as usize,
@@ -357,9 +387,9 @@ impl<T: DataType> ColumnReaderImpl<T> {
 
                             // DataPage v2 only supports RLE encoding for repetition
                             // levels
-                            if self.descr.max_rep_level() > 0 {
+                            if self.desc.max_rep_level() > 0 {
                                 let mut rep_decoder =
-                                    LevelDecoder::v2(self.descr.max_rep_level());
+                                    LevelDecoder::v2(self.desc.max_rep_level());
                                 let bytes_read = rep_decoder.set_data_range(
                                     self.num_buffered_values as usize,
                                     &buf,
@@ -372,9 +402,9 @@ impl<T: DataType> ColumnReaderImpl<T> {
 
                             // DataPage v2 only supports RLE encoding for definition
                             // levels
-                            if self.descr.max_def_level() > 0 {
+                            if self.desc.max_def_level() > 0 {
                                 let mut def_decoder =
-                                    LevelDecoder::v2(self.descr.max_def_level());
+                                    LevelDecoder::v2(self.desc.max_def_level());
                                 let bytes_read = def_decoder.set_data_range(
                                     self.num_buffered_values as usize,
                                     &buf,
@@ -397,8 +427,6 @@ impl<T: DataType> ColumnReaderImpl<T> {
                 }
             }
         }
-
-        Ok(true)
     }
 
     /// Resolves and updates encoding and set decoder for the current page
@@ -421,7 +449,7 @@ impl<T: DataType> ColumnReaderImpl<T> {
             // Search cache for data page decoder
             if !self.decoders.contains_key(&encoding) {
                 // Initialize decoder for this page
-                let data_decoder = get_decoder::<T>(self.descr.clone(), encoding)?;
+                let data_decoder = get_decoder::<T>(self.desc.clone(), encoding)?;
                 self.decoders.insert(encoding, data_decoder);
             }
             self.decoders.get_mut(&encoding).unwrap()
@@ -491,7 +519,7 @@ impl<T: DataType> ColumnReaderImpl<T> {
         }
 
         if encoding == Encoding::RLE_DICTIONARY {
-            let mut dictionary = PlainDecoder::<T>::new(self.descr.type_length());
+            let mut dictionary = PlainDecoder::<T>::new(self.desc.type_length());
             let num_values = page.num_values();
             dictionary.set_data(page.buffer().clone(), num_values as usize)?;
 
