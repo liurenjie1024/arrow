@@ -489,6 +489,8 @@ impl MutableBuffer {
             len: self.len,
             owned: false,
         };
+        
+        self.len = 0
         Buffer {
             data: Arc::new(buffer_data),
             offset: 0,
