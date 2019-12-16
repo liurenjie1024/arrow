@@ -310,7 +310,9 @@ impl<T: DataType> ColumnReaderImpl<T> {
             
             match page_reader.get_next_page()? {
                 // No more page to read
-                None => continue,
+                None => {
+                    self.current_page_reader = None
+                },
                 Some(current_page) => {
                     match current_page {
                         // 1. Dictionary page: configure dictionary for this page.
