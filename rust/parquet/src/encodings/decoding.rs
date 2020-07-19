@@ -126,6 +126,27 @@ pub fn get_decoder<T: DataType>(
     Ok(decoder)
 }
 
+
+pub fn get_decoder_simple<T: DataType>(
+    type_len: i32,
+    encoding: Encoding,
+) -> Result<Box<Decoder<T>>> {
+    let decoder: Box<Decoder<T>> = match encoding {
+        Encoding::PLAIN => Box::new(PlainDecoder::new(type_len)),
+        Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY => {
+            return Err(general_err!(
+                "Cannot initialize this encoding through this function"
+            ));
+        }
+        Encoding::RLE => Box::new(RleValueDecoder::new()),
+        Encoding::DELTA_BINARY_PACKED => Box::new(DeltaBitPackDecoder::new()),
+        Encoding::DELTA_LENGTH_BYTE_ARRAY => Box::new(DeltaLengthByteArrayDecoder::new()),
+        Encoding::DELTA_BYTE_ARRAY => Box::new(DeltaByteArrayDecoder::new()),
+        e => return Err(nyi_err!("Encoding {} is not supported", e)),
+    };
+    Ok(decoder)
+}
+
 // ----------------------------------------------------------------------
 // PLAIN Decoding
 
